@@ -127,8 +127,16 @@ def analyze_technical(ticker):
     except:
         return None
 
+# 修改 run_quant_screener 裡的進度顯示
 def run_quant_screener(market_name, stock_list):
     results = []
+    total = len(stock_list)
+    print(f"🔍 開始掃描 {market_name} (共 {total} 檔)...")
+    for i, ticker in enumerate(stock_list):
+        if (i + 1) % 10 == 0:  # 每 10 檔印一次進度
+            print(f"⏳ 進度: {i+1}/{total}")
+        
+        # ... 原本的抓取邏輯 ...
     print(f"🔍 開始掃描 {market_name}...")
     for ticker in stock_list:
         fund = get_fundamentals(ticker)
