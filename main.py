@@ -1,0 +1,127 @@
+import os
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import requests
+from datetime import datetime
+import time
+
+# ==========================================
+# 1. 從 GitHub Secrets 讀取金鑰 (免信用卡安全性設定)
+# ==========================================
+TELEGRAM_TOKEN = os.environ.get('8521737407:AAGAQ1BTr7ZMpU2VXVAeN3fQ3zDDMJCoxoM')
+TELEGRAM_CHAT_ID = os.environ.get('8558286533')
+
+# 定義股票池 (你可以自行增減)
+US_STOCKS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'AMD', 'INTC', 'TSM', 'QCOM', 'MU']
+TW_STOCKS = ['2330.TW', '2317.TW', '2454.TW', '2308.TW', '2382.TW', '2881.TW', '2603.TW', '3231.TW', '2356.TW', '2303.TW']
+
+# ==========================================
+# 2. 防彈版量化核心 (已針對 yfinance 更新優化)
+# ==========================================
+def get_fundamentals(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        # 優先抓取即時價格
+        try:
+            price = stock.fast_info['lastPrice']
+        except:
+            hist = stock.history(period="1d")
+            price = hist['Close'].iloc[-1] if not hist.empty else 0
+        
+        info = stock.info
+        eps = info.get('trailingEps', info.get('forwardEps', 1.0))
+        pe = info.get('trailingPE', np.nan)
+        pb = info.get('priceToBook', np.nan)
+        name = info.get('shortName', ticker)
+
+        if price == 0: return None
+        return {'Ticker': ticker, 'Name': name, 'Price': price, 'P/E': pe, 'P/B': pb, 'EPS': eps}
+    except:
+        return None
+
+def analyze_technical(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period="6mo")
+        if df.empty or len(df) < 20: return None
+        
+        # 移除時區限制，避免計算報錯
+        df.index = df.index.tz_localize(None)
+
+        # 手工計算指標：布林通道 (20, 2)
+        df['SMA_20'] = df['Close'].rolling(window=20).mean()
+        df['STD_20'] = df['Close'].rolling(window=20).std()
+        df['Lower_Band'] = df['SMA_20'] - (df['STD_20'] * 2)
+        
+        # 手工計算指標：RSI (14)
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        df['RSI_14'] = 100 - (100 / (1 + (gain / loss)))
+        
+        latest, prev = df.iloc[-1], df.iloc[-2]
+        rsi_14, close_price, lower_band = latest['RSI_14'], latest['Close'], latest['Lower_Band']
+        
+        if pd.isna(rsi_14) or pd.isna(lower_band): return None
+        
+        tech_status = "中性"
+        if rsi_14 < 30: tech_status = "RSI超賣"
+        elif close_price <= lower_band * 1.02: tech_status = "通道底部支撐"
+        elif rsi_14 > 30 and prev['RSI_14'] <= 30: tech_status = "超賣突破反轉"
+            
+        return {'RSI(14)': round(rsi_14, 2), 'Tech_Status': tech_status}
+    except:
+        return None
+
+def run_quant_screener(market_name, stock_list):
+    results = []
+    for ticker in stock_list:
+        fund = get_fundamentals(ticker)
+        if not fund: continue
+        tech = analyze_technical(ticker)
+        if not tech: continue
+        
+        data = {**fund, **tech, 'Market': market_name}
+        score = 100
+        if not np.isnan(data['P/E']) and data['P/E'] < 15: score += (15 - data['P/E']) * 2
+        if not np.isnan(data['P/B']) and data['P/B'] < 2: score += (2 - data['P/B']) * 10
+        if data['RSI(14)'] < 40: score += (40 - data['RSI(14)'])
+        if data['Tech_Status'] in ["通道底部支撐", "超賣突破反轉"]: score += 20
+        
+        data['Total_Score'] = score
+        results.append(data)
+        time.sleep(1) # 稍微停頓，避免被 Yahoo 封鎖
+    
+    df = pd.DataFrame(results)
+    return df.sort_values(by='Total_Score', ascending=False).head(5) if not df.empty else df
+
+def send_telegram(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    requests.post(url, json=payload)
+
+# ==========================================
+# 4. 主程式執行
+# ==========================================
+if __name__ == "__main__":
+    us_df = run_quant_screener("美股", US_STOCKS)
+    tw_df = run_quant_screener("台股", TW_STOCKS)
+    
+    report = f"🚀 <b>【GitHub 免費版：量化雷達】</b>\n📅 日期: {datetime.now().strftime('%Y-%m-%d')}\n"
+    report += "-----------------------------------\n"
+    
+    report += "🇹🇼 <b>台股 Top 5:</b>\n"
+    if not tw_df.empty:
+        for _, r in tw_df.iterrows(): 
+            report += f"🔹 <code>{r['Ticker']}</code>: {r['Total_Score']:.1f} (RSI: {r['RSI(14)']})\n"
+    else: report += "無符合標的\n"
+            
+    report += "\n🇺🇸 <b>美股 Top 5:</b>\n"
+    if not us_df.empty:
+        for _, r in us_df.iterrows(): 
+            report += f"🔹 <code>{r['Ticker']}</code>: {r['Total_Score']:.1f} (RSI: {r['RSI(14)']})\n"
+    else: report += "無符合標的\n"
+    
+    send_telegram(report)
