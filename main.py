@@ -97,31 +97,55 @@ def run_quant_screener(market_name, stock_list):
     return df.sort_values(by='Total_Score', ascending=False).head(5) if not df.empty else df
 
 def send_telegram(message):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID: return
+    """加強版：會回報失敗原因的發送函數"""
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("❌ 錯誤：環境變數缺失，無法發送訊息。")
+        return
+        
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-    requests.post(url, json=payload)
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            print("✅ Telegram 訊息發送成功！")
+        else:
+            print(f"❌ Telegram 發送失敗！錯誤碼: {response.status_code}")
+            print(f"❌ 伺服器回傳訊息: {response.text}")
+    except Exception as e:
+        print(f"❌ 網路連線發生錯誤: {e}")
 
 # ==========================================
 # 4. 主程式執行
 # ==========================================
 if __name__ == "__main__":
+    print("🚀 開始掃描美股...")
     us_df = run_quant_screener("美股", US_STOCKS)
+    
+    print("🚀 開始掃描台股...")
     tw_df = run_quant_screener("台股", TW_STOCKS)
     
-    report = f"🚀 <b>【GitHub 免費版：量化雷達】</b>\n📅 日期: {datetime.now().strftime('%Y-%m-%d')}\n"
+    report = f"📊 <b>【量化雲端：正式啟動】</b>\n📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
     report += "-----------------------------------\n"
     
-    report += "🇹🇼 <b>台股 Top 5:</b>\n"
+    has_data = False
     if not tw_df.empty:
-        for _, r in tw_df.iterrows(): 
-            report += f"🔹 <code>{r['Ticker']}</code>: {r['Total_Score']:.1f} (RSI: {r['RSI(14)']})\n"
-    else: report += "無符合標的\n"
+        has_data = True
+        report += "🇹🇼 <b>台股 Top 5:</b>\n"
+        for _, r in tw_df.iterrows(): report += f"🔹 <code>{r['Ticker']}</code>: {r['Total_Score']:.1f}\n"
             
-    report += "\n🇺🇸 <b>美股 Top 5:</b>\n"
     if not us_df.empty:
-        for _, r in us_df.iterrows(): 
-            report += f"🔹 <code>{r['Ticker']}</code>: {r['Total_Score']:.1f} (RSI: {r['RSI(14)']})\n"
-    else: report += "無符合標的\n"
+        has_data = True
+        report += "\n🇺🇸 <b>美股 Top 5:</b>\n"
+        for _, r in us_df.iterrows(): report += f"🔹 <code>{r['Ticker']}</code>: {r['Total_Score']:.1f}\n"
+
+    if not has_data:
+        report += "📢 今日兩大市場皆無符合標準的低估標的。\n"
     
+    print("📤 正在嘗試發送 Telegram 報告...")
     send_telegram(report)
+    print("🏁 程式執行完畢！")
