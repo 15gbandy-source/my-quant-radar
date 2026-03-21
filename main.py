@@ -10,8 +10,9 @@ import time
 # 1. 從 GitHub Secrets 讀取金鑰 (免信用卡安全性設定)
 # ==========================================
 # 確保這兩行「完全大寫」，且與 GitHub Secrets 的名稱一字不差
-TELEGRAM_TOKEN = os.getenv('8521737407:AAGAQ1BTr7ZMpU2VXVAeN3fQ3zDDMJCoxoM')
-TELEGRAM_CHAT_ID = os.getenv('8558286533')
+# 括號裡面要填的是你在 GitHub Secrets 設定的「變數名稱」
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 # 定義股票池 (你可以自行增減)
 US_STOCKS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'AMD', 'INTC', 'TSM', 'QCOM', 'MU']
