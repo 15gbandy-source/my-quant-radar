@@ -125,6 +125,11 @@ def send_telegram(message):
 # 4. 主程式執行
 # ==========================================
 if __name__ == "__main__":
+    print(f"DEBUG: 嘗試讀取 Token 長度 = {len(str(TELEGRAM_TOKEN)) if TELEGRAM_TOKEN else '找不到'}")
+    print(f"DEBUG: 嘗試讀取 Chat ID = {TELEGRAM_CHAT_ID if TELEGRAM_CHAT_ID else '找不到'}")
+    
+    print("🚀 啟動掃描...")
+    # ... 原本的掃描程式碼 ...
     print("🚀 開始掃描美股...")
     us_df = run_quant_screener("美股", US_STOCKS)
     
