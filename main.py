@@ -161,12 +161,12 @@ if __name__ == "__main__":
     has_data = False
     if not tw_df.empty:
         has_data = True
-        report += "🇹🇼 <b>台股 Top 5:</b>\n"
+        report += "🇹🇼 <b>台股 Top 10:</b>\n"
         for _, r in tw_df.iterrows(): report += f"🔹 <code>{r['Ticker']}</code>: {r['Total_Score']:.1f}\n"
             
     if not us_df.empty:
         has_data = True
-        report += "\n🇺🇸 <b>美股 Top 5:</b>\n"
+        report += "\n🇺🇸 <b>美股 Top 10:</b>\n"
         for _, r in us_df.iterrows(): report += f"🔹 <code>{r['Ticker']}</code>: {r['Total_Score']:.1f}\n"
 
     if not has_data:
