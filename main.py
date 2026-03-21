@@ -15,8 +15,27 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 # 定義股票池 (你可以自行增減)
-US_STOCKS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'AMD', 'INTC', 'TSM', 'QCOM', 'MU']
-TW_STOCKS = ['2330.TW', '2317.TW', '2454.TW', '2308.TW', '2382.TW', '2881.TW', '2603.TW', '3231.TW', '2356.TW', '2303.TW']
+# ==========================================
+# 擴充版：台美股 50 檔 AI & 半導體供應鏈
+# ==========================================
+
+# 美股 25 檔：包含晶片設計、設備、軟體平台、AI散熱與資料中心
+US_STOCKS = [
+    'NVDA', 'AMD', 'INTC', 'TSM', 'AVGO',    # 五大晶片巨頭
+    'QCOM', 'MRVL', 'ARM', 'ASML', 'AMAT',   # 網通、架構與設備商
+    'LRCX', 'KLAC', 'MU', 'SMCI', 'DELL',    # 記憶體、檢測與伺服器組裝
+    'HPE', 'VRT', 'ANET', 'MSFT', 'GOOGL',   # 散熱、交換器與雲端三巨頭
+    'AMZN', 'META', 'PLTR', 'CDNS', 'SNPS'   # AI軟體、EDA工具與大數據
+]
+
+# 台股 25 檔：包含護國神山、ASIC設計、AI伺服器組裝、散熱與電源管理
+TW_STOCKS = [
+    '2330.TW', '2454.TW', '2317.TW', '2382.TW', '3231.TW', # 權值五虎
+    '6669.TW', '2376.TW', '2357.TW', '3017.TW', '3324.TW', # 伺服器與散熱
+    '3711.TW', '2308.TW', '2301.TW', '3661.TW', '3443.TW', # 封裝、電源與ASIC設計
+    '2303.TW', '5269.TW', '2379.TW', '3034.TW', '2449.TW', # IC設計與測試
+    '8046.TW', '3037.TW', '3583.TW', '6223.TW', '2049.TW'  # 載板、設備與機器人概念
+]
 
 # ==========================================
 # 2. 防彈版量化核心 (已針對 yfinance 更新優化)
@@ -93,10 +112,10 @@ def run_quant_screener(market_name, stock_list):
         
         data['Total_Score'] = score
         results.append(data)
-        time.sleep(1) # 稍微停頓，避免被 Yahoo 封鎖
+        time.sleep(2) # 稍微停頓，避免被 Yahoo 封鎖
     
     df = pd.DataFrame(results)
-    return df.sort_values(by='Total_Score', ascending=False).head(5) if not df.empty else df
+    return df.sort_values(by='Total_Score', ascending=False).head(10) if not df.empty else df
 
 def send_telegram(message):
     """加強版：會回報失敗原因的發送函數"""
