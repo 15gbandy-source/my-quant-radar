@@ -10,9 +10,8 @@ import time
 # 1. 從 GitHub Secrets 讀取金鑰 (免信用卡安全性設定)
 # ==========================================
 # 確保這兩行「完全大寫」，且與 GitHub Secrets 的名稱一字不差
-TELEGRAM_TOKEN = os.environ.get('8521737407:AAGAQ1BTr7ZMpU2VXVAeN3fQ3zDDMJCoxoM')
-TELEGRAM_CHAT_ID = os.environ.get('8558286533')
-
+TELEGRAM_TOKEN = os.getenv('8521737407:AAGAQ1BTr7ZMpU2VXVAeN3fQ3zDDMJCoxoM')
+TELEGRAM_CHAT_ID = os.getenv('8558286533')
 
 # 定義股票池 (你可以自行增減)
 US_STOCKS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'NVDA', 'AMD', 'INTC', 'TSM', 'QCOM', 'MU']
