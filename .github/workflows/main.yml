@@ -2,9 +2,8 @@ name: Daily Quant Radar
 
 on:
   schedule:
-    # 這是 cron 表示法，設定每天台灣時間 18:30 執行 (UTC 10:30)
     - cron: '30 10 * * 1-5'
-  workflow_dispatch: # 這一行很重要，它讓你可以手動點擊「Run」來隨時測試
+  workflow_dispatch: # 手動觸發按鈕
 
 jobs:
   build:
@@ -23,6 +22,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run Radar
+        # 關鍵修正點：這裡必須精確對應你在 Secrets 設定的名稱
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
