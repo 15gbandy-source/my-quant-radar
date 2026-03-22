@@ -131,7 +131,7 @@ def analyze_asset(ticker, market, category):
             pe = info.get('trailingPE', 30)
             if pe < 15 and pe > 0:
                 score += 30
-                reasons.append("本益比偏低(<15)")
+                reasons.append("本益比偏低(低於15)")
             elif pe < 25 and pe > 0:
                 score += 15
                 reasons.append("估值合理")
