@@ -64,98 +64,98 @@ def get_market_config():
     ]
 
 # ==========================================
-# 2. 核心量化分析與評分邏輯
+# 2. 核心量化分析與評分邏輯 (已重構策略)
 # ==========================================
 def analyze_asset(ticker, market, category):
     try:
         asset = yf.Ticker(ticker)
-        # 抓取 6 個月歷史資料以計算波動率與均線
+        # 抓取 6 個月歷史資料
         df = asset.history(period="6mo")
         if df.empty or len(df) < 30: return None
         
-        info = asset.info
         curr_price = df['Close'].iloc[-1]
         prev_price = df['Close'].iloc[-2]
         chg_pct = ((curr_price - prev_price) / prev_price) * 100
         
-        # --- 基本過濾 ---
-        m_cap = info.get('marketCap', 0)
-        if market == '美股' and (m_cap < 1e9 or curr_price < 5): return None
-        if market == '台股' and (m_cap < 5e9 or curr_price < 15): return None
+        # --- 基本過濾與流動性計算 ---
+        curr_vol = df['Volume'].iloc[-1]
+        avg_vol_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
+        daily_turnover = avg_vol_20 * curr_price
+        
+        # 濾掉死水股：台股日均成交額須大於3000萬，美股/加密貨幣須大於100萬
+        if market == '台股' and daily_turnover < 30_000_000: return None
+        if market in ['美股', '加密貨幣'] and daily_turnover < 1_000_000: return None
 
         # --- 技術指標計算 ---
         # 1. 均線與布林通道
         ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
         std20 = df['Close'].rolling(window=20).std().iloc[-1]
         upper_band = ma20 + (2 * std20)
+        lower_band = ma20 - (2 * std20)
         
-        # 2. RSI (相對強弱)
+        # 2. 修正版 Wilder's RSI (指數平滑，反應更精準)
         delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean().iloc[-1]
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean().iloc[-1]
-        rsi = 100 - (100 / (1 + (gain / loss))) if loss != 0 else 50
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean().iloc[-1]
+        avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean().iloc[-1]
+        rs = avg_gain / avg_loss if avg_loss != 0 else 0
+        rsi = 100 - (100 / (1 + rs)) if avg_loss != 0 else 100
         
-        # 3. 波動率 (用於目標價)
-        daily_return = df['Close'].pct_change().dropna()
-        # 加密貨幣一週7天，股票一週5天
-        days_in_week = 7 if market == '加密貨幣' else 5
-        volatility_7d = daily_return.std() * np.sqrt(days_in_week)
+        # 3. ATR 真實波動幅度 (用於取代標準差計算目標價)
+        high_low = df['High'] - df['Low']
+        high_close = np.abs(df['High'] - df['Close'].shift())
+        low_close = np.abs(df['Low'] - df['Close'].shift())
+        ranges = pd.concat([high_low, high_close, low_close], axis=1)
+        true_range = np.max(ranges, axis=1)
+        atr = true_range.rolling(14).mean().iloc[-1]
 
-        # --- 評分系統 (總分 100) 與 高分原因判定 ---
+        # --- 全新策略評分系統 (總分 100) ---
         score = 0
         reasons = []
         
-        # A. 趨勢分 (最高 40)
+        # A. 趨勢與動能突破 (最高 50分)
         if curr_price > ma20:
-            score += 30
-            reasons.append("站上月線")
-            if curr_price > upper_band:
-                score += 10
-                reasons.append("突破布林上軌")
-        else:
-            score += 10 # 跌破月線基礎分
-            
-        # B. 動能分 (最高 30)
-        if 40 <= rsi <= 70:
-            score += 30
-            reasons.append("動能穩健")
-        elif rsi < 30:
             score += 20
-            reasons.append("RSI超賣反彈機率高")
+            reasons.append("站上月線")
+            # 必須帶量突破才給分，避免假突破
+            if curr_price > upper_band and curr_vol > (avg_vol_20 * 1.2):
+                score += 30
+                reasons.append("帶量突破上軌")
+                
+        # B. 極度超跌反彈 (最高 30分，與策略A互斥)
+        elif curr_price < lower_band and rsi < 30:
+            score += 30
+            reasons.append("極度超跌乖離")
+            
+        # C. 內部結構與強度確認 (最高 20分)
+        if 50 <= rsi <= 70:
+            score += 20
+            reasons.append("多頭動能穩健")
         elif rsi > 70:
-            score += 15 # 超買區風險較高，給分較低
+            score += 10 # 逼近超買區稍微扣分
             reasons.append("強勢但逼近超買")
             
-        # C. 價值/題材分 (最高 30，加密貨幣以動能取代)
-        if market != '加密貨幣':
-            pe = info.get('trailingPE', 30)
-            if pe < 15 and pe > 0:
-                score += 30
-                reasons.append("本益比偏低(低於15)")
-            elif pe < 25 and pe > 0:
-                score += 15
-                reasons.append("估值合理")
+        # 加密貨幣專屬動能加分
+        if market == '加密貨幣' and chg_pct > 5:
+            score += 10
+            reasons.append("24H強勢爆發")
+
+        # 整理高分原因
+        if not reasons: return None
+        reason_str = "、".join(reasons[:2])
+
+        # --- 目標價與狀態推算 ---
+        # 如果站上月線，目標看多 1.5 個 ATR 幅度；如果在月線下，目標反彈到月線
+        if curr_price > ma20:
+            target_price = curr_price + (atr * 1.5)
+            status = "🔥強勢突破" if score >= 70 else "轉強"
         else:
-            # 加密貨幣若 24h 漲幅超過 5% 給予動能加分
-            if chg_pct > 5:
-                score += 30
-                reasons.append("24H強勢爆發")
-            elif chg_pct > 0:
-                score += 15
-                reasons.append("維持多頭格局")
-
-        # 整理高分原因 (取前兩個最顯著的)
-        reason_str = "、".join(reasons[:2]) if reasons else "盤整中"
-
-        # --- 一週目標價推算 ---
-        # 若分數 > 60，預測向上 1 個標準差；否則預測向下支撐
-        direction = 1 if score > 60 else -1
-        target_price = curr_price * (1 + (volatility_7d * direction))
-
-        # --- 狀態標籤 ---
-        status = "🔥強勢" if score >= 80 else "轉強" if score >= 60 else "⚠️轉弱"
+            target_price = ma20
+            status = "❄️超跌反彈"
+            
         if rsi > 75: status = "🚨超買"
-        if rsi < 25: status = "❄️超跌"
+        if rsi < 25: status = "🚨超賣"
 
         return {
             'Ticker': ticker,
@@ -187,13 +187,14 @@ if __name__ == "__main__":
     for s_list, m_type, c_type in configs:
         for ticker in s_list:
             res = analyze_asset(ticker, m_type, c_type)
-            if res:
+            # 只保留分數 >= 50 的標的，過濾掉一堆無聊的盤整股
+            if res and res['Score'] >= 50:
                 all_results.append(res)
             time.sleep(0.25) # 控制請求頻率，避免被 yfinance 擋
 
     df_all = pd.DataFrame(all_results)
     if df_all.empty:
-        print("❌ 今日無掃描資料，程式結束。")
+        print("❌ 今日無符合條件之強勢或超跌標的，程式結束。")
         exit()
 
     # --- 建立報表 ---
@@ -217,12 +218,12 @@ if __name__ == "__main__":
             c_str = f"{r['ChgPct']:+.2f}%"
             t_str = f"{r['Target']:.2f}"
             
-            icon = "⭐" if r['Score'] >= 80 else "🔹"
+            icon = "⭐" if r['Score'] >= 70 else "🔹"
             
             # 第一行：代碼、現價、漲跌、目標價、分數
             report += f"{icon} <code>{r['Ticker']}</code>: {p_str} ({c_str}) 🎯{t_str} <b>[{r['Score']}]</b>\n"
             # 第二行：狀態、RSI、高分原因
-            report += f"   ➔ {r['Status']} | RSI:{r['RSI']} | 💡{r['Reason']}\n"
+            report += f"    ➔ {r['Status']} | RSI:{r['RSI']} | 💡{r['Reason']}\n"
             
         report += "-----------------------------------\n"
 
