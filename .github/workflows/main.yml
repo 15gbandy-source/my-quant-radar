@@ -2,10 +2,14 @@ name: Daily Quant Radar
 
 on:
   schedule:
-    - cron: '30 10 * * 1-5'
+    # 台灣時間 06:00 (對應 UTC 22:00 前一天，每天執行)
+    - cron: '0 22 * * *'
+    # 台灣時間 16:00 (對應 UTC 08:00，每天執行)
+    - cron: '0 8 * * *'
   workflow_dispatch: # 手動觸發按鈕
 
 jobs:
+# ... 後面的 jobs 區塊維持你原本的樣子不用動 ...
   build:
     runs-on: ubuntu-latest
     steps:
