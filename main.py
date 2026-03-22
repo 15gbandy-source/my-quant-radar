@@ -1,7 +1,6 @@
 import os
 import yfinance as yf
 import pandas as pd
-import numpy as np
 import requests
 from datetime import datetime
 import time
@@ -64,98 +63,93 @@ def get_market_config():
     ]
 
 # ==========================================
-# 2. 核心量化分析與評分邏輯 (已重構策略)
+# 2. 核心量化引擎：長線多頭與乖離率策略
 # ==========================================
-def analyze_asset(ticker, market, category):
+def analyze_long_term_asset(ticker, market, category):
     try:
         asset = yf.Ticker(ticker)
-        # 抓取 6 個月歷史資料
-        df = asset.history(period="6mo")
-        if df.empty or len(df) < 30: return None
+        # 長線均線需要至少 1 年的歷史交易日
+        df = asset.history(period="1y")
+        if df.empty or len(df) < 200: 
+            return None
         
         curr_price = df['Close'].iloc[-1]
         prev_price = df['Close'].iloc[-2]
         chg_pct = ((curr_price - prev_price) / prev_price) * 100
         
-        # --- 基本過濾與流動性計算 ---
-        curr_vol = df['Volume'].iloc[-1]
+        # --- 流動性防護網 ---
         avg_vol_20 = df['Volume'].rolling(window=20).mean().iloc[-1]
         daily_turnover = avg_vol_20 * curr_price
-        
-        # 濾掉死水股：台股日均成交額須大於3000萬，美股/加密貨幣須大於100萬
-        if market == '台股' and daily_turnover < 30_000_000: return None
-        if market in ['美股', '加密貨幣'] and daily_turnover < 1_000_000: return None
+        # 台股均量單位為股，1億台幣為底線；美股/Crypto 1000萬美元為底線
+        if market == '台股' and daily_turnover < 100_000_000: return None
+        if market in ['美股', '加密貨幣'] and daily_turnover < 10_000_000: return None
 
-        # --- 技術指標計算 ---
-        # 1. 均線與布林通道
-        ma20 = df['Close'].rolling(window=20).mean().iloc[-1]
-        std20 = df['Close'].rolling(window=20).std().iloc[-1]
-        upper_band = ma20 + (2 * std20)
-        lower_band = ma20 - (2 * std20)
+        # --- 長線技術護城河 ---
+        ma50 = df['Close'].rolling(window=50).mean().iloc[-1]
+        ma200 = df['Close'].rolling(window=200).mean().iloc[-1]
         
-        # 2. 修正版 Wilder's RSI (指數平滑，反應更精準)
-        delta = df['Close'].diff()
-        gain = delta.where(delta > 0, 0)
-        loss = -delta.where(delta < 0, 0)
-        avg_gain = gain.ewm(alpha=1/14, min_periods=14, adjust=False).mean().iloc[-1]
-        avg_loss = loss.ewm(alpha=1/14, min_periods=14, adjust=False).mean().iloc[-1]
-        rs = avg_gain / avg_loss if avg_loss != 0 else 0
-        rsi = 100 - (100 / (1 + rs)) if avg_loss != 0 else 100
-        
-        # 3. ATR 真實波動幅度 (用於取代標準差計算目標價)
-        high_low = df['High'] - df['Low']
-        high_close = np.abs(df['High'] - df['Close'].shift())
-        low_close = np.abs(df['Low'] - df['Close'].shift())
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        atr = true_range.rolling(14).mean().iloc[-1]
+        # [嚴格淘汰] 季線跌破年線，長線空頭確立，直接放棄
+        if ma50 < ma200:
+            return None
 
-        # --- 全新策略評分系統 (總分 100) ---
-        score = 0
+        score = 30 # 通過長線多頭考驗，給予基礎分
         reasons = []
-        
-        # A. 趨勢與動能突破 (最高 50分)
-        if curr_price > ma20:
-            score += 20
-            reasons.append("站上月線")
-            # 必須帶量突破才給分，避免假突破
-            if curr_price > upper_band and curr_vol > (avg_vol_20 * 1.2):
-                score += 30
-                reasons.append("帶量突破上軌")
+        status = "觀察中"
+
+        # --- 寬鬆的基本面加分項 (不強求，避免 API 報錯) ---
+        pe_str, roe_str = "N/A", "N/A"
+        if market != '加密貨幣':
+            try:
+                # 設定極短 timeout 或單純用 try-except 包覆，避免雲端執行卡死
+                info = asset.info
+                pe = info.get('trailingPE')
+                roe = info.get('returnOnEquity')
                 
-        # B. 極度超跌反彈 (最高 30分，與策略A互斥)
-        elif curr_price < lower_band and rsi < 30:
-            score += 30
-            reasons.append("極度超跌乖離")
+                if pe and pe > 0:
+                    pe_str = f"{float(pe):.1f}"
+                    if (category == '科技' and pe < 35) or (category != '科技' and pe < 15):
+                        score += 15
+                        reasons.append("估值偏低")
+                        
+                if roe:
+                    roe_val = float(roe) * 100
+                    roe_str = f"{roe_val:.1f}%"
+                    if roe_val > 15:
+                        score += 15
+                        reasons.append("高ROE")
+            except Exception:
+                pass # 忽略 yfinance info 錯誤，純走技術面
+
+        # --- 價格乖離與買點判定 ---
+        dist_to_ma50 = (curr_price - ma50) / ma50
+        
+        if -0.02 <= dist_to_ma50 <= 0.05:
+            # 股價落在季線支撐帶附近 (+5% 到 -2%)，屬於波段最佳買點
+            score += 40
+            reasons.append("回測季線有撐")
+            status = "⭐可建倉"
             
-        # C. 內部結構與強度確認 (最高 20分)
-        if 50 <= rsi <= 70:
+        elif dist_to_ma50 > 0.20:
+            # 乖離過大，容易有短線回檔壓力
+            score -= 10
+            reasons.append("乖離過大")
+            status = "🚨高風險"
+            
+        elif dist_to_ma50 > 0.05:
+            # 已經發動，穩定爬升中
             score += 20
-            reasons.append("多頭動能穩健")
-        elif rsi > 70:
-            score += 10 # 逼近超買區稍微扣分
-            reasons.append("強勢但逼近超買")
+            reasons.append("多頭延續")
+            status = "📈續抱區"
             
-        # 加密貨幣專屬動能加分
-        if market == '加密貨幣' and chg_pct > 5:
-            score += 10
-            reasons.append("24H強勢爆發")
-
-        # 整理高分原因
-        if not reasons: return None
-        reason_str = "、".join(reasons[:2])
-
-        # --- 目標價與狀態推算 ---
-        # 如果站上月線，目標看多 1.5 個 ATR 幅度；如果在月線下，目標反彈到月線
-        if curr_price > ma20:
-            target_price = curr_price + (atr * 1.5)
-            status = "🔥強勢突破" if score >= 70 else "轉強"
         else:
-            target_price = ma20
-            status = "❄️超跌反彈"
-            
-        if rsi > 75: status = "🚨超買"
-        if rsi < 25: status = "🚨超賣"
+            # 跌破季線較深，有轉弱疑慮
+            status = "⚠️跌破季線"
+
+        # [嚴格淘汰] 總分不足 50 或跌破季線轉弱的標的，不顯示在報表上
+        if score < 50 or status == "⚠️跌破季線": 
+            return None
+
+        reason_str = "、".join(reasons) if reasons else "長線多頭排列"
 
         return {
             'Ticker': ticker,
@@ -163,75 +157,83 @@ def analyze_asset(ticker, market, category):
             'Category': category,
             'Price': curr_price,
             'ChgPct': chg_pct,
-            'Target': target_price,
             'Score': score,
-            'RSI': round(rsi, 1),
+            'PE': pe_str,
+            'ROE': roe_str,
+            'DistMA50': dist_to_ma50 * 100, # 儲存數值方便後續排序
             'Status': status,
             'Reason': reason_str
         }
+        
     except Exception as e:
         return None
 
 # ==========================================
-# 3. 執行分析與發送 Telegram 報表
+# 3. 報表生成與 Telegram 推播
 # ==========================================
 if __name__ == "__main__":
     print(f"啟動時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     configs = get_market_config()
     all_results = []
     
-    # 計算總標的數
     total_assets = sum(len(s[0]) for s in configs)
-    print(f"🚀 量化雷達啟動，準備掃描 {total_assets} 檔標的...")
+    print(f"🚀 長線價值雷達啟動，準備掃描 {total_assets} 檔標的...")
 
     for s_list, m_type, c_type in configs:
         for ticker in s_list:
-            res = analyze_asset(ticker, m_type, c_type)
-            # 只保留分數 >= 50 的標的，過濾掉一堆無聊的盤整股
-            if res and res['Score'] >= 50:
+            res = analyze_long_term_asset(ticker, m_type, c_type)
+            if res:
                 all_results.append(res)
-            time.sleep(0.25) # 控制請求頻率，避免被 yfinance 擋
+            # 確保不會觸發 429 Too Many Requests
+            time.sleep(0.3) 
 
     df_all = pd.DataFrame(all_results)
     if df_all.empty:
-        print("❌ 今日無符合條件之強勢或超跌標的，程式結束。")
+        print("❌ 今日全市場無符合【長線多頭】條件之標的，程式結束。")
         exit()
 
     # --- 建立報表 ---
-    report = f"📊 <b>【量化雷達 5.0：全市場掃描】</b>\n"
+    report = f"📊 <b>【長線投資雷達：優質標的觀察名單】</b>\n"
     report += f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+    report += "📝 邏輯：長線多頭 (50MA>200MA) + 季線乖離率判定\n"
     report += "-----------------------------------\n"
 
-    # 定義要發送的市場順序
-    markets_to_report = ['加密貨幣', '台股', '美股']
+    markets_to_report = ['台股', '美股', '加密貨幣']
 
     for m in markets_to_report:
-        df_m = df_all[df_all['Market'] == m].sort_values(by='Score', ascending=False)
+        df_m = df_all[df_all['Market'] == m]
         if df_m.empty: continue
         
-        report += f"\n🏆 <b>{m} 強勢榜 Top 10</b>\n"
+        report += f"\n🏆 <b>{m} 市場掃描結果</b>\n"
         
-        top_10 = df_m.head(10)
-        for _, r in top_10.iterrows():
-            # 數值格式化
-            p_str = f"{r['Price']:.2f}"
-            c_str = f"{r['ChgPct']:+.2f}%"
-            t_str = f"{r['Target']:.2f}"
-            
-            icon = "⭐" if r['Score'] >= 70 else "🔹"
-            
-            # 第一行：代碼、現價、漲跌、目標價、分數
-            report += f"{icon} <code>{r['Ticker']}</code>: {p_str} ({c_str}) 🎯{t_str} <b>[{r['Score']}]</b>\n"
-            # 第二行：狀態、RSI、高分原因
-            report += f"    ➔ {r['Status']} | RSI:{r['RSI']} | 💡{r['Reason']}\n"
-            
+        # 1. 優先顯示「⭐可建倉」(回測季線的標的)
+        df_buy = df_m[df_m['Status'] == '⭐可建倉'].sort_values(by='DistMA50', ascending=True)
+        if not df_buy.empty:
+            report += "<b>【🎯 買點浮現區 (近季線)】</b>\n"
+            for _, r in df_buy.head(10).iterrows():
+                report += f"🌟 <code>{r['Ticker']}</code>: {r['Price']:.2f} ({r['ChgPct']:+.2f}%)\n"
+                if m != '加密貨幣':
+                    report += f"    ➔ 體質: PE {r['PE']} | ROE {r['ROE']}\n"
+                report += f"    ➔ 距季線: {r['DistMA50']:.1f}% | 💡 {r['Reason']}\n"
+            report += "\n"
+
+        # 2. 顯示「📈續抱區」(強勢股)
+        df_hold = df_m[df_m['Status'] == '📈續抱區'].sort_values(by='Score', ascending=False)
+        if not df_hold.empty:
+            report += "<b>【🚀 主升段強勢區 (宜續抱)】</b>\n"
+            for _, r in df_hold.head(5).iterrows(): # 強勢股只看前 5 名避免版面太長
+                report += f"🔹 <code>{r['Ticker']}</code>: {r['Price']:.2f} ({r['ChgPct']:+.2f}%)\n"
+                report += f"    ➔ 距季線: {r['DistMA50']:.1f}%\n"
+        
         report += "-----------------------------------\n"
 
-    # --- Telegram 發送邏輯 ---
     print("準備發送報表至 Telegram...")
-    # 若訊息過長，Telegram API 限制為 4096 字元，進行安全截斷
-    if len(report) > 4000:
-        report = report[:3950] + "\n...(資料過多，僅顯示部分內容)"
+    # 安全截斷，避免字串過長
+    if len(report) > 3800:
+        report = report[:3800] + "\n\n⚠️ <b>...(資料過多，已安全截斷)</b>"
+
+    # 確保字串中沒有會破壞 HTML 解析的未閉合角括號 (將可能出錯的符號轉義)
+    report = report.replace("<3", "&lt;3").replace(" > ", " &gt; ")
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
